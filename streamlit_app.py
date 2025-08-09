@@ -485,9 +485,9 @@ def display_metrics_cards(data: Dict[str, Any]):
     
     # 流入/放流量
     with col4:
-        inflow = data.get('dam', {}).get('inflow', 0)
-        outflow = data.get('dam', {}).get('outflow', 0)
-        flow_diff = inflow - outflow if inflow and outflow else 0
+        inflow = data.get('dam', {}).get('inflow', 0) or 0
+        outflow = data.get('dam', {}).get('outflow', 0) or 0
+        flow_diff = inflow - outflow
         
         flow_class = "danger" if abs(flow_diff) > 50 else "warning" if abs(flow_diff) > 30 else "normal"
         
