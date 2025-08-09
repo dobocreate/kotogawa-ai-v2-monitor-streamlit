@@ -348,24 +348,24 @@ def display_alert_banner(data: Dict[str, Any]):
     if level_class == "danger" or rain_class == "danger":
         final_class = "danger"
         if level_class == "danger":
-            final_message = f"{icon} **{level_name}** - {description}"
+            final_message = f"{icon} <strong>{level_name}</strong> - {description}"
         else:
-            final_message = f"{rain_icon} **{rain_level}** - {rain_desc}"
+            final_message = f"{rain_icon} <strong>{rain_level}</strong> - {rain_desc}"
     elif level_class == "warning" or rain_class == "warning":
         final_class = "warning"
         if level_class == "warning":
-            final_message = f"{icon} **{level_name}** - {description}"
+            final_message = f"{icon} <strong>{level_name}</strong> - {description}"
         else:
-            final_message = f"{rain_icon} **{rain_level}** - {rain_desc}"
+            final_message = f"{rain_icon} <strong>{rain_level}</strong> - {rain_desc}"
     elif level_class == "caution" or rain_class == "caution":
         final_class = "caution"
         if level_class == "caution":
-            final_message = f"{icon} **{level_name}** - {description}"
+            final_message = f"{icon} <strong>{level_name}</strong> - {description}"
         else:
-            final_message = f"{rain_icon} **{rain_level}** - {rain_desc}"
+            final_message = f"{rain_icon} <strong>{rain_level}</strong> - {rain_desc}"
     else:
         final_class = "normal"
-        final_message = f"{icon} **{level_name}** - {description}"
+        final_message = f"{icon} <strong>{level_name}</strong> - {description}"
     
     st.markdown(f"""
         <div class="alert-card alert-{final_class}">
@@ -506,54 +506,295 @@ def display_metrics_cards(data: Dict[str, Any]):
             </div>
         """, unsafe_allow_html=True)
 
-def create_modern_graph(df: pd.DataFrame, title: str, y_cols: list, colors: list = None):
-    """モダンなスタイルのグラフを作成"""
-    fig = go.Figure()
+def load_history_data(hours: int = 72) -> List[Dict[str, Any]]:
+    """履歴データを読み込む"""
+    history_data = []
+    data_dir = Path("data/history")
     
-    if colors is None:
-        colors = ['#2196F3', '#4CAF50', '#FF9800', '#F44336']
+    if not data_dir.exists():
+        return history_data
     
-    for i, col in enumerate(y_cols):
-        if col in df.columns:
-            fig.add_trace(go.Scatter(
-                x=df['datetime'],
-                y=df[col],
-                name=col,
+    # 現在時刻から指定時間分のデータを取得
+    now = datetime.now(JST)
+    start_time = now - timedelta(hours=hours)
+    
+    # 年/月/日のディレクトリ構造を走査
+    for year_dir in sorted(data_dir.iterdir(), reverse=True):
+        if not year_dir.is_dir():
+            continue
+        for month_dir in sorted(year_dir.iterdir(), reverse=True):
+            if not month_dir.is_dir():
+                continue
+            for day_dir in sorted(month_dir.iterdir(), reverse=True):
+                if not day_dir.is_dir():
+                    continue
+                
+                # JSONファイルを読み込み
+                for json_file in sorted(day_dir.glob("*.json"), reverse=True):
+                    try:
+                        with open(json_file, 'r', encoding='utf-8') as f:
+                            data = json.load(f)
+                            
+                        # タイムスタンプを確認
+                        timestamp_str = data.get('timestamp') or data.get('data_time')
+                        if timestamp_str:
+                            timestamp = datetime.fromisoformat(timestamp_str.replace('Z', '+00:00'))
+                            if timestamp.tzinfo is None:
+                                timestamp = timestamp.replace(tzinfo=JST)
+                            else:
+                                timestamp = timestamp.astimezone(JST)
+                            
+                            if timestamp >= start_time:
+                                history_data.append(data)
+                    except Exception:
+                        continue
+    
+    # 時刻順にソート
+    history_data.sort(key=lambda x: x.get('timestamp') or x.get('data_time', ''))
+    return history_data
+
+def create_river_water_level_graph(history_data: List[Dict[str, Any]], display_hours: int = 24) -> go.Figure:
+    """河川水位グラフを作成（河川水位 + ダム全放流量の二軸表示）"""
+    # データをDataFrameに変換
+    df_data = []
+    for item in history_data:
+        data_time = item.get('data_time') or item.get('timestamp', '')
+        try:
+            dt = datetime.fromisoformat(data_time.replace('Z', '+00:00'))
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=JST)
+            else:
+                dt = dt.astimezone(JST)
+        except:
+            continue
+            
+        row = {'timestamp': dt}
+        
+        # 河川水位
+        river_level = item.get('river', {}).get('water_level')
+        if river_level is not None:
+            row['river_level'] = river_level
+        
+        # ダム全放流量
+        outflow = item.get('dam', {}).get('outflow')
+        if outflow is not None:
+            row['outflow'] = outflow
+        
+        df_data.append(row)
+    
+    if not df_data:
+        fig = go.Figure()
+        fig.add_annotation(
+            text="データがありません",
+            xref="paper", yref="paper",
+            x=0.5, y=0.5, showarrow=False
+        )
+        return fig
+    
+    df = pd.DataFrame(df_data)
+    
+    # 二軸グラフを作成
+    fig = make_subplots(specs=[[{"secondary_y": True}]])
+    
+    # 河川水位（左軸）
+    if 'river_level' in df.columns:
+        fig.add_trace(
+            go.Scatter(
+                x=df['timestamp'],
+                y=df['river_level'],
                 mode='lines+markers',
-                line=dict(color=colors[i % len(colors)], width=2.5),
-                marker=dict(size=6),
-                hovertemplate='%{y:.2f}<extra></extra>'
-            ))
+                name='河川水位（持世寺）',
+                line=dict(color='#2196F3', width=3),
+                marker=dict(size=6)
+            ),
+            secondary_y=False
+        )
+    
+    # ダム全放流量（右軸）
+    if 'outflow' in df.columns:
+        fig.add_trace(
+            go.Scatter(
+                x=df['timestamp'],
+                y=df['outflow'],
+                mode='lines+markers',
+                name='全放流量（ダム）',
+                line=dict(color='#FF9800', width=3),
+                marker=dict(size=6)
+            ),
+            secondary_y=True
+        )
+    
+    # 氾濫危険水位ライン
+    fig.add_hline(
+        y=5.5,
+        line_dash="dash",
+        line_color="red",
+        line_width=2,
+        secondary_y=False,
+        annotation_text="氾濫危険水位 (5.5m)"
+    )
+    
+    # 軸の設定
+    fig.update_yaxes(
+        title_text="河川水位 (m)",
+        range=[0, 8],
+        secondary_y=False
+    )
+    fig.update_yaxes(
+        title_text="全放流量 (m³/s)",
+        range=[0, 1200],
+        secondary_y=True
+    )
+    
+    fig.update_xaxes(title_text="時刻")
     
     fig.update_layout(
-        title=dict(text=title, font=dict(size=18, color='#212121')),
-        xaxis=dict(
-            title="",
-            gridcolor='#E0E0E0',
-            showgrid=True,
-            zeroline=False
-        ),
-        yaxis=dict(
-            title="",
-            gridcolor='#E0E0E0',
-            showgrid=True,
-            zeroline=False
-        ),
-        plot_bgcolor='white',
-        paper_bgcolor='white',
-        hovermode='x unified',
         height=400,
-        margin=dict(l=50, r=50, t=50, b=50),
+        showlegend=True,
         legend=dict(
             orientation="h",
             yanchor="bottom",
-            y=-0.2,
+            y=-0.3,
             xanchor="center",
             x=0.5
-        )
+        ),
+        margin=dict(l=50, r=50, t=30, b=100),
+        plot_bgcolor='white',
+        paper_bgcolor='white'
     )
     
     return fig
+
+def create_dam_water_level_graph(history_data: List[Dict[str, Any]], display_hours: int = 24) -> go.Figure:
+    """ダム貯水位グラフを作成（ダム水位 + 時間雨量の二軸表示）"""
+    # データをDataFrameに変換
+    df_data = []
+    for item in history_data:
+        data_time = item.get('data_time') or item.get('timestamp', '')
+        try:
+            dt = datetime.fromisoformat(data_time.replace('Z', '+00:00'))
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=JST)
+            else:
+                dt = dt.astimezone(JST)
+        except:
+            continue
+            
+        row = {'timestamp': dt}
+        
+        # ダム水位
+        dam_level = item.get('dam', {}).get('water_level')
+        if dam_level is not None:
+            row['dam_level'] = dam_level
+        
+        # 雨量
+        rainfall = item.get('rainfall', {}).get('hourly')
+        if rainfall is not None:
+            row['rainfall'] = rainfall
+        
+        df_data.append(row)
+    
+    if not df_data:
+        fig = go.Figure()
+        fig.add_annotation(
+            text="データがありません",
+            xref="paper", yref="paper",
+            x=0.5, y=0.5, showarrow=False
+        )
+        return fig
+    
+    df = pd.DataFrame(df_data)
+    
+    # 二軸グラフを作成
+    fig = make_subplots(specs=[[{"secondary_y": True}]])
+    
+    # ダム水位（左軸）
+    if 'dam_level' in df.columns:
+        fig.add_trace(
+            go.Scatter(
+                x=df['timestamp'],
+                y=df['dam_level'],
+                mode='lines+markers',
+                name='ダム貯水位',
+                line=dict(color='#4CAF50', width=3),
+                marker=dict(size=6)
+            ),
+            secondary_y=False
+        )
+    
+    # 時間雨量（右軸）
+    if 'rainfall' in df.columns:
+        fig.add_trace(
+            go.Bar(
+                x=df['timestamp'],
+                y=df['rainfall'],
+                name='時間雨量',
+                marker_color='#87CEEB',
+                opacity=0.7
+            ),
+            secondary_y=True
+        )
+    
+    # 軸の設定
+    fig.update_yaxes(
+        title_text="ダム貯水位 (m)",
+        range=[30, 40],
+        secondary_y=False
+    )
+    fig.update_yaxes(
+        title_text="時間雨量 (mm/h)",
+        range=[0, 60],
+        secondary_y=True
+    )
+    
+    fig.update_xaxes(title_text="時刻")
+    
+    fig.update_layout(
+        height=400,
+        showlegend=True,
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=-0.3,
+            xanchor="center",
+            x=0.5
+        ),
+        margin=dict(l=50, r=50, t=30, b=100),
+        plot_bgcolor='white',
+        paper_bgcolor='white'
+    )
+    
+    return fig
+
+def display_graphs(data: Dict[str, Any]):
+    """グラフ表示セクション"""
+    # 表示期間の選択
+    display_hours = st.select_slider(
+        "表示期間",
+        options=[6, 12, 24, 48, 72],
+        value=24,
+        format_func=lambda x: f"{x}時間"
+    )
+    
+    # 履歴データを読み込み
+    history_data = load_history_data(display_hours)
+    
+    if not history_data:
+        st.warning("履歴データがありません")
+        return
+    
+    # 2列レイアウトでグラフを表示
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.markdown("#### 河川水位・全放流量")
+        fig1 = create_river_water_level_graph(history_data, display_hours)
+        st.plotly_chart(fig1, use_container_width=True)
+    
+    with col2:
+        st.markdown("#### ダム貯水位・時間雨量")
+        fig2 = create_dam_water_level_graph(history_data, display_hours)
+        st.plotly_chart(fig2, use_container_width=True)
 
 def main():
     """メインアプリケーション"""
@@ -613,8 +854,8 @@ def main():
     tab1, tab2, tab3 = st.tabs(["📈 時系列グラフ", "🌤️ 天気予報", "📋 データテーブル"])
     
     with tab1:
-        # ここに既存のグラフ表示ロジックを配置
-        st.info("グラフ表示機能は既存のコードから移植します")
+        # 既存のグラフ表示ロジックを移植
+        display_graphs(data)
     
     with tab2:
         # 天気予報
