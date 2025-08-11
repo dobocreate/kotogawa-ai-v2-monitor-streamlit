@@ -1,10 +1,11 @@
 name: Data Cleanup
 
-on:
-  schedule:
-    # 毎日0時（UTC）に実行
-    - cron: '0 0 * * *'
-  workflow_dispatch: # 手動実行も可能
+# DISABLED: Development in progress
+# on:
+#   schedule:
+#     # 毎日0時（UTC）に実行
+#     - cron: '0 0 * * *'
+#   workflow_dispatch: # 手動実行も可能
 
 jobs:
   cleanup-data:
